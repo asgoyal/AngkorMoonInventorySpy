@@ -5,6 +5,7 @@ import java.util.List;
 
 public class InventoryItem {
     private String name;
+    private String code;
     private List<InventoryItem> subItems;
     private boolean isOutOfStock;
     private String url;
@@ -18,6 +19,12 @@ public class InventoryItem {
 
     public String getName() {
         return this.name;
+    }
+
+    public String getCode() { return this.code; }
+
+    public void setCode(String code) {
+        this.code = code;
     }
 
     public String getUrl() {
