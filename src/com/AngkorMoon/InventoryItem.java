@@ -7,15 +7,21 @@ public class InventoryItem {
     private String name;
     private List<InventoryItem> subItems;
     private boolean isOutOfStock;
+    private String url;
 
-    public InventoryItem(String name) {
+    public InventoryItem(String name, String url) {
         this.name = name;
+        this.url = url;
         this.subItems = new ArrayList<>();
         this.isOutOfStock = false;
     }
 
     public String getName() {
         return this.name;
+    }
+
+    public String getUrl() {
+        return this.url;
     }
 
     public List<InventoryItem> getSubItems() {
