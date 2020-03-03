@@ -5,20 +5,18 @@ import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
 import java.util.*;
+import java.util.concurrent.*;
 
 public class BellaFindingProcessor implements IUrlProcessor {
     private IHtmlParser htmlParser;
     private ILogger processingLogger;
     private ILogger intermediateResultLogger;
     private ILogger outOfStockLogger;
-    private boolean loggingEnabled;
-    private static int childCount = 0;
-    private static int childsProcessed = 20;
-    private static boolean hardStop = false;
+    private static int maxThreads = 5;
+    private static long waitTerminationTime = 60000;
 
     public BellaFindingProcessor() {
         this.htmlParser = JsoupHtmlParser.getInstance();
-        this.loggingEnabled = true;
         this.processingLogger = new UrlProcessorLogger("InventoryProcessingSteps.log");
         this.intermediateResultLogger = new UrlProcessorLogger("InventoryProcessingIntermediateResults.log");
         this.outOfStockLogger = new UrlProcessorLogger("InventoryOutOfStock.log");
@@ -42,23 +40,55 @@ public class BellaFindingProcessor implements IUrlProcessor {
             }
         }
 
-        List<InventoryItem> queue = new ArrayList<>(inventoryRoot.getSubItems());
+        List<InventoryItem> queue = Collections.synchronizedList(new ArrayList<>(inventoryRoot.getSubItems()));
+        ExecutorService executor = Executors.newFixedThreadPool(maxThreads);
         while (!queue.isEmpty()) {
-            InventoryItem currentItem = queue.remove(0);
-            this.processCurrentItem(currentItem);
-            if (!hardStop) {
-                queue.addAll(currentItem.getSubItems());
-            } else {
-                this.processingLogger.info("App reached max processing limit, hard stopping");
-                break;
+            // create task list to execute
+            List<Callable<InventoryItem>> taskList = new ArrayList<>();
+            int taskCount = Math.min(2 * maxThreads, queue.size());
+            while (taskCount > 0) {
+                taskList.add(() -> this.processQueueItem(queue));
+                taskCount--;
+            }
+
+            //Execute all tasks and get reference to Future objects
+            List<Future<InventoryItem>> resultList = null;
+
+            try {
+                resultList = executor.invokeAll(taskList);
+
+                // await all results
+                for (Future<InventoryItem> future : resultList) {
+                    InventoryItem result = future.get(waitTerminationTime, TimeUnit.MILLISECONDS);
+                    String message = "Finished Processing: " + result.getName() + ", link: " + result.getUrl();
+                    this.logProcessingMessage(message);
+                }
+            } catch (InterruptedException | ExecutionException | TimeoutException e) {
+                e.printStackTrace();
+                this.logProcessingMessage("Failed Processing due to: " + e.getMessage());
             }
         }
+
+        executor.shutdown();
 
         return inventoryRoot;
     }
 
+    private InventoryItem processQueueItem(List<InventoryItem> queue) {
+        InventoryItem currentItem = queue.remove(0);
+        this.processCurrentItem(currentItem);
+        queue.addAll(currentItem.getSubItems());
+        return currentItem;
+    }
+
     private void processCurrentItem(InventoryItem currentItem) {
         Document document = this.htmlParser.parse(currentItem.getUrl());
+        if (document == null) {
+            // we failed to process, log and return
+            this.logProcessingMessage("Failed processing: " + currentItem.getName() + ", link: " + currentItem.getUrl());
+            return;
+        }
+
         // if there are sub categories, they are inside a table with id = TABLE_CATEGORIES
         Elements categories = document.select("table#TABLE_CATEGORIES");
         if (!categories.isEmpty()) {
@@ -82,10 +112,10 @@ public class BellaFindingProcessor implements IUrlProcessor {
                     this.logOutOfStockItem(currentItem);
                 }
 
-                childCount++;
-                if (childsProcessed != -1 && childCount > childsProcessed) {
-                    hardStop = true;
-                }
+//                childCount++;
+//                if (childsProcessed != -1 && childCount > childsProcessed) {
+//                    hardStop = true;
+//                }
             }
         }
     }
