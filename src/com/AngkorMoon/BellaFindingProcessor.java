@@ -13,13 +13,15 @@ public class BellaFindingProcessor implements IUrlProcessor {
     private ILogger intermediateResultLogger;
     private ILogger outOfStockLogger;
     private static int maxThreads = 5;
+    private static int taskSize = 2 * maxThreads;
+    private static int logQueueSize = 2 * taskSize;
     private static long waitTerminationTime = 60000;
 
     public BellaFindingProcessor() {
         this.htmlParser = JsoupHtmlParser.getInstance();
-        this.processingLogger = new UrlProcessorLogger("InventoryProcessingSteps.log");
-        this.intermediateResultLogger = new UrlProcessorLogger("InventoryProcessingIntermediateResults.log");
-        this.outOfStockLogger = new UrlProcessorLogger("InventoryOutOfStock.log");
+        this.processingLogger = new UrlProcessorLogger("InventoryProcessingSteps.log", logQueueSize);
+        this.intermediateResultLogger = new UrlProcessorLogger("InventoryProcessingIntermediateResults.log", logQueueSize);
+        this.outOfStockLogger = new UrlProcessorLogger("InventoryOutOfStock.log", logQueueSize);
     }
 
     @Override
@@ -61,11 +63,16 @@ public class BellaFindingProcessor implements IUrlProcessor {
                 for (Future<InventoryItem> future : resultList) {
                     InventoryItem result = future.get(waitTerminationTime, TimeUnit.MILLISECONDS);
                     String message = "Finished Processing: " + result.getName() + ", link: " + result.getUrl();
-                    this.logProcessingMessage(message);
+                    this.collectProcessingLog(message);
                 }
             } catch (InterruptedException | ExecutionException | TimeoutException e) {
                 e.printStackTrace();
-                this.logProcessingMessage("Failed Processing due to: " + e.getMessage());
+                this.collectProcessingLog("Failed Processing due to: " + e.getMessage());
+            } finally {
+                // dump all the collected logs to log file.
+                this.processingLogger.writeAll();
+                this.intermediateResultLogger.writeAll();
+                this.outOfStockLogger.writeAll();
             }
         }
 
@@ -85,7 +92,7 @@ public class BellaFindingProcessor implements IUrlProcessor {
         Document document = this.htmlParser.parse(currentItem.getUrl());
         if (document == null) {
             // we failed to process, log and return
-            this.logProcessingMessage("Failed processing: " + currentItem.getName() + ", link: " + currentItem.getUrl());
+            this.collectProcessingLog("Failed processing: " + currentItem.getName() + ", link: " + currentItem.getUrl());
             return;
         }
 
@@ -93,23 +100,23 @@ public class BellaFindingProcessor implements IUrlProcessor {
         Elements categories = document.select("table#TABLE_CATEGORIES");
         if (!categories.isEmpty()) {
             String message = "Processing category: " + currentItem.getName() + ", link: " + currentItem.getUrl();
-            this.logProcessingMessage(message);
+            this.collectProcessingLog(message);
             this.processTableCategories(currentItem, categories);
         } else {
             // as per their pattern, sub categories will also have a drop down "SELECT ONE"
             categories = document.select("form#myForm");
             if (!categories.isEmpty()) {
                 String message = "Processing category: " + currentItem.getName() + ", link: " + currentItem.getUrl();
-                this.logProcessingMessage(message);
+                this.collectProcessingLog(message);
                 this.processFormOptions(currentItem, categories);
             } else {
                 // this is a child item, get its relevant details
                 String message = "Processing item: " + currentItem.getName() + ", link: " + currentItem.getUrl();
-                this.logProcessingMessage(message);
+                this.collectProcessingLog(message);
                 this.processChildItem(currentItem, document);
-                this.logIntermediateResultMessage(currentItem);
+                this.collectIntermediateResultLog(currentItem);
                 if (currentItem.isOutOfStock()) {
-                    this.logOutOfStockItem(currentItem);
+                    this.collectOutOfStockItemLog(currentItem);
                 }
 
 //                childCount++;
@@ -165,20 +172,17 @@ public class BellaFindingProcessor implements IUrlProcessor {
         childItem.setOutOfStock(!outOfStockFonts.isEmpty());
     }
 
-    private void logProcessingMessage(String message) {
-        System.out.println(message);
-        this.processingLogger.info(message);
+    private void collectProcessingLog(String message) {
+        this.processingLogger.collect(message);
     }
 
-    private void logIntermediateResultMessage(InventoryItem currentItem) {
+    private void collectIntermediateResultLog(InventoryItem currentItem) {
         String message = "Item: " + currentItem.getName() + ", code: " + currentItem.getCode() + ", out of stock: " + currentItem.isOutOfStock() + ", link: " + currentItem.getUrl();
-        System.out.println(message);
-        this.intermediateResultLogger.info(message);
+        this.intermediateResultLogger.collect(message);
     }
 
-    private void logOutOfStockItem(InventoryItem currentItem) {
+    private void collectOutOfStockItemLog(InventoryItem currentItem) {
         String message = "Out of stock item: " + currentItem.getName() + ", code: " + currentItem.getCode() + ", link: " + currentItem.getUrl();
-        System.out.println(message);
-        this.outOfStockLogger.info(message);
+        this.outOfStockLogger.collect(message);
     }
 }
