@@ -18,7 +18,7 @@ public class JsoupHtmlParser implements IHtmlParser {
 
     @Override
     public Document parse(String url) throws IOException {
-        Document document = Jsoup.connect(url).get();
+        Document document = Jsoup.connect(url).timeout(5000).get();
 
         assert document != null;
         return document;
