@@ -4,6 +4,7 @@ import org.jsoup.nodes.Document;
 import org.jsoup.nodes.Element;
 import org.jsoup.select.Elements;
 
+import java.io.IOException;
 import java.util.*;
 import java.util.concurrent.*;
 
@@ -14,7 +15,7 @@ public class BellaFindingProcessor implements IUrlProcessor {
     private ILogger outOfStockLogger;
     private static int maxThreads = 5;
     private static int taskSize = 2 * maxThreads;
-    private static int logQueueSize = 2 * taskSize;
+    private static int logQueueSize = 10 * taskSize;
     private static long waitTerminationTime = 60000;
 
     public BellaFindingProcessor() {
@@ -26,7 +27,7 @@ public class BellaFindingProcessor implements IUrlProcessor {
 
     @Override
     public InventoryItem process(String url) {
-        Document document = this.htmlParser.parse(url);
+        Document document = this.parseHtmlDocumentFromUrl(new InventoryItem("home", url));
 
         Elements inventories = document.select("ul#example");
 
@@ -47,7 +48,7 @@ public class BellaFindingProcessor implements IUrlProcessor {
         while (!queue.isEmpty()) {
             // create task list to execute
             List<Callable<InventoryItem>> taskList = new ArrayList<>();
-            int taskCount = Math.min(2 * maxThreads, queue.size());
+            int taskCount = Math.min(taskSize, queue.size());
             while (taskCount > 0) {
                 taskList.add(() -> this.processQueueItem(queue));
                 taskCount--;
@@ -56,18 +57,26 @@ public class BellaFindingProcessor implements IUrlProcessor {
             //Execute all tasks and get reference to Future objects
             List<Future<InventoryItem>> resultList = null;
 
+            InventoryItem result = null;
             try {
                 resultList = executor.invokeAll(taskList);
 
                 // await all results
                 for (Future<InventoryItem> future : resultList) {
-                    InventoryItem result = future.get(waitTerminationTime, TimeUnit.MILLISECONDS);
+                    result = future.get(waitTerminationTime, TimeUnit.MILLISECONDS);
                     String message = "Finished Processing: " + result.getName() + ", link: " + result.getUrl();
                     this.collectProcessingLog(message);
                 }
             } catch (InterruptedException | ExecutionException | TimeoutException e) {
-                e.printStackTrace();
-                this.collectProcessingLog("Failed Processing due to: " + e.getMessage());
+                if (result != null) {
+                    this.collectProcessingLog("Failed Processing: " + result.getName()
+                            + ", link: " + result.getUrl()
+                            + ", due to: Error in thread execution"
+                            + ", exception: " + e.getClass().getName()
+                            + ", exception message: " + e.getMessage());
+                } else {
+                    this.collectProcessingLog("Failed Processing due to: " + e.getMessage());
+                }
             } finally {
                 // dump all the collected logs to log file.
                 this.processingLogger.writeAll();
@@ -89,7 +98,7 @@ public class BellaFindingProcessor implements IUrlProcessor {
     }
 
     private void processCurrentItem(InventoryItem currentItem) {
-        Document document = this.htmlParser.parse(currentItem.getUrl());
+        Document document = this.parseHtmlDocumentFromUrl(currentItem);
         if (document == null) {
             // we failed to process, log and return
             this.collectProcessingLog("Failed processing: " + currentItem.getName() + ", link: " + currentItem.getUrl());
@@ -184,5 +193,20 @@ public class BellaFindingProcessor implements IUrlProcessor {
     private void collectOutOfStockItemLog(InventoryItem currentItem) {
         String message = "Out of stock item: " + currentItem.getName() + ", code: " + currentItem.getCode() + ", link: " + currentItem.getUrl();
         this.outOfStockLogger.collect(message);
+    }
+
+    private Document parseHtmlDocumentFromUrl(InventoryItem item) {
+        Document document = null;
+        try {
+            document = this.htmlParser.parse(item.getUrl());
+        } catch (IOException e) {
+            this.collectProcessingLog("Failed Processing: " + item.getName()
+                    + ", link: " + item.getUrl()
+                    + ", due to: Error fetching or parsing link url"
+                    + ", exception: " + e.getClass().getName()
+                    + ", exception message: " + e.getMessage());
+        }
+
+        return document;
     }
 }

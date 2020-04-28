@@ -17,13 +17,8 @@ public class JsoupHtmlParser implements IHtmlParser {
     }
 
     @Override
-    public Document parse(String url) {
-        Document document = null;
-        try {
-            document = Jsoup.connect(url).get();
-        } catch (IOException e) {
-            e.printStackTrace();
-        }
+    public Document parse(String url) throws IOException {
+        Document document = Jsoup.connect(url).get();
 
         assert document != null;
         return document;
